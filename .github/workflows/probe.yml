@@ -27,9 +27,15 @@ jobs:
           screencapture -x ../desktop.png || true
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: macos, path: out/*.png out/*.log out/*.txt }
+        with:
+          name: macos
+          path: |
+            out/*.png
+            out/*.log
+            out/*.txt
   windows-clean:
     runs-on: windows-2022
+    timeout-minutes: 40
     steps:
       - name: fetch nightly
         shell: pwsh
@@ -50,7 +56,7 @@ jobs:
           $p = Start-Process -FilePath $exe.FullName -ArgumentList '--screenshot','C:\probe\ed.png','--size','1600x960','--frames','10' -PassThru -Wait -NoNewWindow
           "splashedit exit: " + $p.ExitCode + (' (0x{0:X8})' -f $p.ExitCode)
           $m = Get-ChildItem -Recurse C:\probe -Filter pcsx-redux.main | Select-Object -First 1
-          if ($m) { Copy-Item $m.FullName ($m.DirectoryName + '\probe-redux.exe'); $q = Start-Process -FilePath ($m.DirectoryName + '\probe-redux.exe') -ArgumentList '-help' -PassThru -Wait -NoNewWindow; "redux exit: " + $q.ExitCode + (' (0x{0:X8})' -f $q.ExitCode) }
+          if ($m) { Copy-Item $m.FullName ($m.DirectoryName + '\probe-redux.exe'); $q = Start-Process -FilePath ($m.DirectoryName + '\probe-redux.exe') -PassThru -NoNewWindow; if ($q.WaitForExit(30000)) { "redux exit: " + $q.ExitCode + (' (0x{0:X8})' -f $q.ExitCode) } else { 'redux still running after 30s (imports resolved)'; $q.Kill() } }
           '@
           Set-Content C:\probe\inner.ps1 $script
           docker run --rm -v C:\probe:C:\probe mcr.microsoft.com/windows/servercore:ltsc2022 powershell -File C:\probe\inner.ps1 *> C:\probe\inner.log

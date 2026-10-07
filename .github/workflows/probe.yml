@@ -1,0 +1,66 @@
+name: probe
+on: [workflow_dispatch]
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - name: fetch nightly as a user would
+        run: |
+          set -x
+          mkdir out && cd out
+          curl -fsSL -o pkg.tar.gz https://github.com/psxsplash/splashedit-ng/releases/download/nightly/splashedit-macos.tar.gz
+          tar xzf pkg.tar.gz
+          # browsers set this; curl does not
+          xattr -w com.apple.quarantine "0083;$(printf %x $(date +%s));Safari;" splashedit/splashedit
+          xattr -l splashedit/splashedit || true
+          codesign -dv splashedit/splashedit 2>&1 || true
+          codesign -dv splashedit/redux/PCSX-Redux.app 2>&1 || true
+          spctl -a -vv splashedit/splashedit 2>&1 || true
+          spctl -a -vv splashedit/redux/PCSX-Redux.app 2>&1 || true
+          otool -L splashedit/splashedit
+          brew list --formula > brew.txt || true
+      - name: run editor with Play
+        run: |
+          cd out/splashedit
+          ./splashedit --screenshot ../editor.png --size 1600x960 --frames 10 --key f5 --wait 8000 > ../run.log 2>&1; echo "exit=$?" >> ../run.log
+          cat ../run.log
+          screencapture -x ../desktop.png || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: macos, path: out/*.png out/*.log out/*.txt }
+  windows-clean:
+    runs-on: windows-2022
+    steps:
+      - name: fetch nightly
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory C:\probe | Out-Null
+          Invoke-WebRequest https://github.com/psxsplash/splashedit-ng/releases/download/nightly/splashedit-windows.zip -OutFile C:\probe\pkg.zip
+          Expand-Archive C:\probe\pkg.zip C:\probe
+          Get-ChildItem -Recurse C:\probe -Filter *.dll | Select-Object FullName | Out-String -Width 300
+      - name: run inside servercore (no VC redist)
+        shell: pwsh
+        run: |
+          $script = @'
+          $ErrorActionPreference = 'Continue'
+          "redist_in_system32: " + ((Test-Path C:\Windows\System32\vcruntime140.dll), (Test-Path C:\Windows\System32\msvcp140.dll) -join ',')
+          "opengl32: " + (Test-Path C:\Windows\System32\opengl32.dll)
+          $exe = Get-ChildItem -Recurse C:\probe -Filter splashedit.exe | Select-Object -First 1
+          Push-Location $exe.DirectoryName
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList '--screenshot','C:\probe\ed.png','--size','1600x960','--frames','10' -PassThru -Wait -NoNewWindow
+          "splashedit exit: " + $p.ExitCode + (' (0x{0:X8})' -f $p.ExitCode)
+          $m = Get-ChildItem -Recurse C:\probe -Filter pcsx-redux.main | Select-Object -First 1
+          if ($m) { Copy-Item $m.FullName ($m.DirectoryName + '\probe-redux.exe'); $q = Start-Process -FilePath ($m.DirectoryName + '\probe-redux.exe') -ArgumentList '-help' -PassThru -Wait -NoNewWindow; "redux exit: " + $q.ExitCode + (' (0x{0:X8})' -f $q.ExitCode) }
+          '@
+          Set-Content C:\probe\inner.ps1 $script
+          docker run --rm -v C:\probe:C:\probe mcr.microsoft.com/windows/servercore:ltsc2022 powershell -File C:\probe\inner.ps1 *> C:\probe\inner.log
+          Get-Content C:\probe\inner.log
+      - name: imports
+        shell: pwsh
+        run: |
+          $dumpbin = Get-ChildItem -Recurse "C:\Program Files\Microsoft Visual Studio" -Filter dumpbin.exe | Where-Object FullName -match 'Hostx64\\x64' | Select-Object -First 1
+          Get-ChildItem -Recurse C:\probe -Include splashedit.exe,pcsx-redux.main | ForEach-Object { "== $($_.Name)"; & $dumpbin.FullName /dependents $_.FullName } *> C:\probe\imports.log
+          Get-Content C:\probe\imports.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: windows, path: "C:/probe/*.log" }
